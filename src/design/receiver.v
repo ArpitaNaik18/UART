@@ -1,114 +1,186 @@
-module uart_rx #(parameter width = 8)(
-    input                   sys_rst,
-    input                   baud_op_clk,
-    input                   uart_rec_data_h,
-    output reg              rec_busy,
-    output reg              rec_ready,
-    output reg [width-1:0]  rec_data_h
+module uart_rx #(parameter N = 8)(
+
+    input               sys_clk,
+    input               rst,
+    input               baud_clk,
+    input               xmith,
+    input               uart_rec_datah,
+
+    output reg [N-1:0]  rec_dataH,
+    output reg          rec_readyH,
+    output reg          rec_busy
 );
 
-    localparam idle  = 2'd0,
-               start = 2'd1,
-               data  = 2'd2,
-               stop  = 2'd3;
+    localparam IDLE     = 3'b000;
+    localparam START    = 3'b001;
+    localparam DATA_OUT = 3'b010;
+    localparam STOP     = 3'b011;
 
-    reg [1:0]             ct, nt;
-    reg [3:0]             count;
-    reg [$clog2(width):0] index;
-    reg                   rx1, rx2;
+    reg rx_ff1, rx_ff2;
 
-    always @(posedge baud_op_clk or negedge sys_rst) begin
-        if (!sys_rst) begin
-            rx1 <= 1'b1;
-            rx2 <= 1'b1;
+    always @(posedge baud_clk or negedge rst) begin
+
+        if(!rst) begin
+
+            rx_ff1 <= 1'b1;
+            rx_ff2 <= 1'b1;
+
         end
+
         else begin
-            rx1 <= uart_rec_data_h;
-            rx2 <= rx1;
+
+            rx_ff1 <= uart_rec_datah;
+            rx_ff2 <= rx_ff1;
+
         end
+
     end
 
+    reg [2:0] state;
 
-    always @(posedge baud_op_clk or negedge sys_rst) begin
-        if (!sys_rst) begin
-            ct         <= idle;
-            count      <= 0;
-            index      <= 0;
-            rec_data_h <= 0;
-            rec_ready  <= 0;
-            rec_busy   <= 0;
+    reg [3:0] count;
+
+    reg [$clog2(N)-1:0] ind;
+
+    reg [N-1:0] temp;
+
+    always @(posedge baud_clk or negedge rst) begin
+
+        if(!rst) begin
+
+            rec_readyH <= 1'b0;
+            rec_busy   <= 1'b0;
+
+            rec_dataH  <= 0;
+
+            state <= IDLE;
+
+            ind   <= 0;
+            count <= 0;
+
+            temp  <= 0;
+
         end
+
         else begin
-            ct <= nt;
 
-            if (ct != nt)
-                count <= 0;
-            else
-                count <= count + 1;
+            rec_readyH <= 1'b0;
 
-            if (ct == data && count == 4)
-                rec_data_h <= {rx2, rec_data_h[width-1:1]};
+            case(state)
 
-            if (ct == idle)
-                index <= 0;
-            else if (ct == data && count == 15)
-                index <= index + 1;
+                IDLE: begin
 
-            
-            if (ct == stop && count == 15 && rx2 != 1'b1)
-                rec_data_h <= 0;
+                    rec_busy <= 1'b0;
 
+                    count <= 0;
+                    ind   <= 0;
 
-            rec_ready <= (ct == stop && nt == idle);  // 1-cycle pulse
-            rec_busy  <= (nt != idle);
+                    if(rx_ff2 == 1'b0) begin
+
+                        state <= START;
+
+                        rec_busy <= 1'b1;
+
+                    end
+
+                end
+
+                START: begin
+
+                    rec_busy <= 1'b1;
+
+                    if(count == 4'd7) begin
+
+                        count <= 0;
+
+                        if(rx_ff2 == 1'b0)
+
+                            state <= DATA_OUT;
+
+                        else
+
+                            state <= IDLE;
+
+                    end
+
+                    else begin
+
+                        count <= count + 1'b1;
+
+                    end
+
+                end
+
+                DATA_OUT: begin
+
+                    rec_busy <= 1'b1;
+
+                    if(count == 4'd15) begin
+
+                        count <= 0;
+
+                        temp <= {rx_ff2,temp[N-1:1]};
+
+                        if(ind == N-1) begin
+
+                            ind <= 0;
+
+                            state <= STOP;
+
+                        end
+
+                        else begin
+
+                            ind <= ind + 1'b1;
+
+                        end
+
+                    end
+
+                    else begin
+
+                        count <= count + 1'b1;
+
+                    end
+
+                end
+
+                STOP: begin
+
+                    rec_busy <= 1'b1;
+
+                    if(count == 4'd15) begin
+
+                        count <= 0;
+
+                        rec_dataH <= temp;
+
+                        rec_readyH <= 1'b1;
+
+                        rec_busy <= 1'b0;
+
+                        state <= IDLE;
+
+                    end
+
+                    else begin
+
+                        count <= count + 1'b1;
+
+                    end
+
+                end
+
+                default: begin
+
+                    state <= IDLE;
+
+                end
+
+            endcase
+
         end
-    end
 
-    always @(*) begin
-        nt = ct;
-
-        case (ct)
-
-            idle: begin
-                if (rx2 == 1'b0)
-                    nt = start;
-                else
-                    nt = idle;
-            end
-
-       start: begin
-    if (count == 15) begin   
-        if (rx2 == 0)
-            nt = data;
-        else
-            nt = idle;
-    end
-    else
-        nt = start;          
-end
-            
-           data: begin
-    if (count == 15) begin   
-        if (index == width - 1)
-            nt = stop;
-        else
-            nt = data;
-    end
-    else
-        nt = data;
-end
-
-            
-            stop: begin
-                if (count == 15)
-                    nt = idle;
-                else
-                    nt = stop;
-            end
-
-            default: nt = idle;
-
-        endcase
     end
 
 endmodule
