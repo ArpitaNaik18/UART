@@ -1,75 +1,159 @@
+module uart_tx #(parameter N=8)(
 
-module uart_tx #(parameter width = 8)(
-    input                   baud_op_clk,
-    input                   sys_rst,
-    input                   xmit_h,
-    input  [width-1:0]      xmit_data_h,
-    output reg              xmit_done_h,
-    output reg              xmit_active,
-    output reg              uart_xmit_data_h
+    input              sys_clk,
+    input              rst,
+    input              baud_clk,
+    input              xmith,
+    input      [N-1:0] xmit_datah,
+
+    output reg         xmit_doneh,
+    output reg         xmit_active,
+    output reg         uart_xmit_dataH
 );
-    localparam idle  = 2'd0,
-               start = 2'd1,
-               data  = 2'd2,
-               stop  = 2'd3;
- 
-    reg [1:0]             ct, nt;
-    reg [3:0]             count;
-    reg [$clog2(width):0] index;
-    reg [width-1:0]       latched_data;
-    reg                   out;
- 
-    always @(posedge baud_op_clk or negedge sys_rst) begin
-        if (!sys_rst) begin
-            ct               <= idle;
-            count            <= 0;
-            index            <= 0;
-            latched_data     <= 0;
-            uart_xmit_data_h <= 1;
-            xmit_done_h      <= 0;
-            xmit_active      <= 0;
+
+    localparam IDLE       = 3'b000;
+    localparam START      = 3'b001;
+    localparam DATA_STATE = 3'b010;
+    localparam STOP       = 3'b011;
+
+    reg [N-1:0] data;
+
+    reg [$clog2(N):0] ind;
+
+    reg [2:0] state;
+
+    reg [3:0] count;
+
+    always @(posedge baud_clk or negedge rst) begin
+
+        if(!rst) begin
+
+            xmit_doneh      <= 1'b0;
+            xmit_active     <= 1'b0;
+            uart_xmit_dataH <= 1'b1;
+
+            state <= IDLE;
+
+            ind   <= 0;
+            count <= 0;
+
+            data  <= 0;
+
         end
+
         else begin
-            ct               <= nt;
-            uart_xmit_data_h <= out;
- 
-            if (xmit_h && ct == idle)
-                latched_data <= xmit_data_h;
- 
-            if (ct == idle)       count <= 0;
-            else if (nt != ct)    count <= 0;
-            else                  count <= count + 1;
- 
-            if (ct == idle)       index <= 0;
-            else if (ct == data && count == 15 && nt == data)
-                                  index <= index + 1;
- 
-            
-            if (ct == stop && nt == idle)
-                xmit_done_h <= 1'b1;
-            else if (ct == idle && xmit_h)
-                xmit_done_h <= 1'b0;
- 
-            xmit_active <= (nt != idle);
+
+            case(state)
+
+                IDLE: begin
+
+                    uart_xmit_dataH <= 1'b1;
+
+                    xmit_doneh <= 1'b0;
+
+                    xmit_active <= 1'b0;
+
+                    count <= 0;
+                    ind   <= 0;
+
+                    if(xmith) begin
+
+                        data <= xmit_datah;
+
+                        uart_xmit_dataH <= 1'b0;
+
+                        state <= START;
+
+                        xmit_active <= 1'b1;
+
+                    end
+
+                end
+
+                START: begin
+
+                    if(count == 4'd14) begin
+
+                        count <= 0;
+
+                        state <= DATA_STATE;
+
+                    end
+
+                    else begin
+
+                        count <= count + 1'b1;
+
+                    end
+
+                end
+
+                DATA_STATE: begin
+
+                    uart_xmit_dataH <= data[ind];
+
+                    if(count == 4'd15) begin
+
+                        count <= 0;
+
+                        if(ind == N-1) begin
+
+                            ind <= 0;
+
+                            state <= STOP;
+
+                        end
+
+                        else begin
+
+                            ind <= ind + 1'b1;
+
+                        end
+
+                    end
+
+                    else begin
+
+                        count <= count + 1'b1;
+
+                    end
+
+                end
+
+                STOP: begin
+
+                    uart_xmit_dataH <= 1'b1;
+
+                    if(count == 4'd15) begin
+
+                        count <= 0;
+
+                        xmit_doneh <= 1'b1;
+
+                        xmit_active <= 1'b0;
+
+                        state <= IDLE;
+
+                    end
+
+                    else begin
+
+                        count <= count + 1'b1;
+
+                    end
+
+                end
+
+                default: begin
+
+                    state <= IDLE;
+
+                end
+
+            endcase
+
         end
+
     end
- 
-    always @(*) begin
-        nt  = ct;
-        out = 1;
-        case (ct)
-            idle:  begin out = 1; nt = xmit_h ? start : idle; end
-            start: begin out = 0; nt = (count == 15) ? data  : start; end
-            data:  begin
-                out = latched_data[index];
-                if (count == 15)
-                    nt = (index == width - 1) ? stop : data;
-                else
-                    nt = data;
-            end
-            stop:  begin out = 1; nt = (count == 15) ? idle : stop; end
-            default: begin out = 1; nt = idle; end
-        endcase
-    end
+
 endmodule
- 
